@@ -1,0 +1,268 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>物理對決球池模擬器 (Ball Pit Simulation)</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #0F0F17;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            color: #F0F0FF;
+            font-family: "Microsoft JhengHei", "微軟正黑體", sans-serif;
+            overflow: hidden; /* 防止空白鍵捲動網頁 */
+        }
+        canvas {
+            background-color: #0F0F17;
+            box-shadow: 0 0 20px rgba(0, 243, 255, 0.15); /* 霓虹光暈效果 */
+            border-radius: 8px;
+        }
+    </style>
+</head>
+<body>
+
+<canvas id="gameCanvas" width="900" height="700"></canvas>
+
+<script>
+    // 初始化 Canvas
+    const canvas = document.getElementById("gameCanvas");
+    const ctx = canvas.getContext("2d");
+
+    // 視窗設定與常數
+    const WIDTH = canvas.width;
+    const HEIGHT = canvas.height;
+    
+    // 色彩定義
+    const BG_COLOR = "rgb(15, 15, 23)";
+    const TEXT_COLOR = "rgb(240, 240, 255)";
+    const PANEL_BG = "rgb(22, 22, 35)";
+    const ACCENT_BLUE = "rgb(0, 243, 255)";
+    const ACCENT_PINK = "rgb(255, 0, 85)";
+
+    // 小球類別
+    class Ball {
+        constructor(x, y, damage, color = ACCENT_BLUE) {
+            this.x = x;
+            this.y = y;
+            this.vx = (Math.random() * 4) - 2; // -2 到 2
+            this.vy = (Math.random() * 3) + 2; // 2 到 5
+            this.radius = 5;
+            this.damage = damage;
+            this.color = color;
+        }
+
+        update() {
+            this.x += this.vx;
+            this.y += this.vy;
+            this.vy += 0.25; // 重力加速度
+
+            // 左右牆壁反彈
+            if (this.x - this.radius < 0) {
+                this.x = this.radius;
+                this.vx *= -0.8;
+            } else if (this.x + this.radius > WIDTH) {
+                this.x = WIDTH - this.radius;
+                this.vx *= -0.8;
+            }
+        }
+
+        draw(ctx) {
+            ctx.beginPath();
+            ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+            ctx.fillStyle = this.color;
+            ctx.fill();
+            ctx.closePath();
+        }
+    }
+
+    // 障礙物(牆壁)類別
+    class Wall {
+        constructor(x, y, w, h, hp) {
+            this.x = x;
+            this.y = y;
+            this.w = w;
+            this.h = h;
+            this.max_hp = hp;
+            this.hp = hp;
+            this.hit_flash = 0; // 碰撞閃爍計時
+        }
+
+        draw(ctx) {
+            // 根據剩餘血量計算顏色深淺
+            let ratio = Math.max(0, this.hp / this.max_hp);
+            let r = Math.floor(40 + 100 * ratio);
+            let g = Math.floor(40 + 100 * ratio);
+            let b = Math.floor(70 + 150 * ratio);
+            let color = `rgb(${r}, ${g}, ${b})`;
+
+            if (this.hit_flash > 0) {
+                color = "rgb(255, 255, 255)"; // 被打中時閃白光
+                this.hit_flash -= 1;
+            }
+
+            // 繪製方塊本體與邊框
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.roundRect(this.x, this.y, this.w, this.h, 4);
+            ctx.fill();
+            ctx.strokeStyle = "rgb(100, 200, 255)";
+            ctx.lineWidth = 1;
+            ctx.stroke();
+
+            // 顯示血量文字
+            ctx.fillStyle = TEXT_COLOR;
+            ctx.font = "16px 'Microsoft JhengHei', sans-serif";
+            ctx.textAlign = "left";
+            ctx.textBaseline = "middle";
+            ctx.fillText(`HP: ${Math.floor(this.hp)}/${this.max_hp}`, this.x + 10, this.y + this.h / 2);
+        }
+    }
+
+    // 建立所有牆壁
+    function create_walls() {
+        let walls = [];
+        const rows = 5;
+        const cols = 3;
+        const margin_x = 80;
+        const start_y = 120;
+        const total_width = WIDTH - (margin_x * 2);
+        const w_width = total_width / cols - 15;
+        const w_height = 40;
+        const gap_y = 75;
+
+        for (let r = 0; r < rows; r++) {
+            let hp = 500 * (r + 1);
+            for (let c = 0; c < cols; c++) {
+                let x = margin_x + c * (w_width + 15);
+                let y = start_y + r * gap_y;
+                walls.push(new Wall(x, y, w_width, w_height, hp));
+            }
+        }
+        return walls;
+    }
+
+    // 遊戲參數
+    const ball_count = 200;
+    const ball_damage = 5;
+    const spawn_interval = 3; 
+
+    let balls = [];
+    let walls = create_walls();
+    let spawn_timer = 0;
+    let simulation_started = false;
+
+    // 事件監聽 (鍵盤控制)
+    window.addEventListener("keydown", (e) => {
+        if (e.code === "Space") {
+            simulation_started = !simulation_started;
+            e.preventDefault(); // 防止網頁捲動
+        } else if (e.code === "KeyR") {
+            balls = [];
+            walls = create_walls();
+            simulation_started = false;
+        }
+    });
+
+    // 遊戲主迴圈
+    function gameLoop() {
+        // 清除畫面 (填滿背景色)
+        ctx.fillStyle = BG_COLOR;
+        ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+        // 邏輯更新 - 生成小球
+        if (simulation_started && balls.length < ball_count) {
+            spawn_timer++;
+            if (spawn_timer >= spawn_interval) {
+                spawn_timer = 0;
+                let randomX = 200 + Math.random() * (WIDTH - 400);
+                balls.push(new Ball(randomX, 20, ball_damage));
+            }
+        }
+
+        // 更新與碰撞檢測 (倒序迴圈方便移除陣列元素)
+        for (let i = balls.length - 1; i >= 0; i--) {
+            let ball = balls[i];
+            ball.update();
+
+            // 到底部邊界移除
+            if (ball.y > HEIGHT) {
+                balls.splice(i, 1);
+                continue;
+            }
+
+            // 與板子碰撞檢測
+            for (let wall of walls) {
+                if (wall.hp > 0) {
+                    if (ball.x >= wall.x && ball.x <= wall.x + wall.w &&
+                        ball.y + ball.radius >= wall.y && ball.y + ball.radius <= wall.y + wall.h) {
+                        
+                        ball.vy *= -0.7; // 反彈
+                        ball.y = wall.y - ball.radius; // 修正位置避免卡住
+                        wall.hp -= ball.damage;
+                        wall.hit_flash = 5;
+                        break;
+                    }
+                }
+            }
+        }
+
+        // 繪製所有障礙物
+        for (let wall of walls) {
+            if (wall.hp > 0) {
+                wall.draw(ctx);
+            }
+        }
+
+        // 繪製所有小球
+        for (let ball of balls) {
+            ball.draw(ctx);
+        }
+
+        // 繪製頂部 HUD 資訊介面
+        ctx.fillStyle = PANEL_BG;
+        ctx.fillRect(0, 0, WIDTH, 70);
+        
+        ctx.beginPath();
+        ctx.moveTo(0, 70);
+        ctx.lineTo(WIDTH, 70);
+        ctx.strokeStyle = "rgb(50, 50, 80)";
+        ctx.lineWidth = 2;
+        ctx.stroke();
+
+        ctx.fillStyle = ACCENT_BLUE;
+        ctx.font = "bold 20px 'Microsoft JhengHei', sans-serif";
+        ctx.textAlign = "left";
+        ctx.textBaseline = "top";
+        ctx.fillText("物理對決球池模擬器 (HTML5 Web 移植版)", 20, 15);
+
+        let remainingWalls = walls.filter(w => w.hp > 0).length;
+        ctx.fillStyle = TEXT_COLOR;
+        ctx.font = "16px 'Microsoft JhengHei', sans-serif";
+        ctx.fillText(`場上球數: ${balls.length} / ${ball_count} | 剩餘板子: ${remainingWalls} / ${walls.length}`, 20, 42);
+
+        ctx.fillStyle = "rgb(150, 150, 180)";
+        ctx.fillText("[空白鍵] 開始/暫停   [R] 重置", WIDTH - 220, 25);
+
+        // 勝負判定
+        if (simulation_started && balls.length >= ball_count && remainingWalls === 0) {
+            ctx.fillStyle = "rgb(0, 255, 128)";
+            ctx.font = "bold 32px 'Microsoft JhengHei', sans-serif";
+            ctx.textAlign = "center";
+            ctx.fillText("VICTORY! 挑戰成功", WIDTH / 2, HEIGHT / 2 - 15);
+        }
+
+        // 要求瀏覽器渲染下一幀 (相當於 clock.tick(60))
+        requestAnimationFrame(gameLoop);
+    }
+
+    // 啟動迴圈
+    requestAnimationFrame(gameLoop);
+</script>
+
+</body>
+</html>
